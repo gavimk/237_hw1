@@ -1,0 +1,350 @@
+---
+title: "Climate Trend Analysis Demo"
+author: "Alicia Fennell, Jordan Isken, Gavriella Keyles"
+date: "4/6/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+The first step is to read in some data. Here, I've chosen the Lake Cachuma station from the National Centers for Environmental Information website:
+https://www.ncdc.noaa.gov/cdo-web/datatools/findstation
+
+Couple of brief notes:
+- I have used the 'setwd' command to change the working directory to the location where my data file is stored on my local machine. You'll need to change that path to the appropriate directory on your own computer.
+
+- The read.table command loads the CSV file provided by NCDC into a table structure in R, here called 'clim'; the as.Date command then transforms the DATE field in that table into an R-formatted date array that R knows how to do things with.
+##################
+```{r readdata}
+library(lubridate)
+library(ggplot2)
+library(tidyverse)
+library(chron)
+library(janitor)
+
+denali_data <-  read.table("denali_data.csv",fill=TRUE,sep=',',header=T) %>% 
+  clean_names() %>% 
+  mutate(date = ymd(date)) %>% 
+  filter(year(date) < 2021)
+
+```
+Now that we've read in the data, the next step is quality checking! Let's make a plot to see what data are missing.
+
+Lets start with daily data of air temperature 
+```{r dailyplots, echo=TRUE}
+
+ggplot(denali_data, aes(date, tmax))+
+  geom_line() + 
+  labs(y="Daily Maximum Temperature (degrees F)", x="Date")
+
+ggplot(denali_data, aes(date, tmin))+
+  geom_line() + 
+  labs(y="Daily Minimum Temperature (degrees F)", x="Date")
+
+ggplot(denali_data, aes(date, prcp))+
+  geom_line()+ 
+  labs(y="Daily Rainfall (in)", x="Date")
+
+```
+Some values are "NA" in temperature and precipitation; these have been trimmed automatically by ggplot, but this may not be the case for all functions. In general, you'll want to check meta data to see how missing data is labelled: -999 or NA are common choices. 
+
+To fill - if < 0.5 percent of data is missing there are some very simple ways to fill
+but you must remember that you are doing this!!!
+
+* **Temperature**
+Average of the previous and following day
+
+* **Precip**
+For dry places like the Sierra, assume no rain where data is missing (This may not be a good assumption in other places! be careful.)
+
+
+```{r dailyplots.filled, echo=TRUE}
+
+# find the row with missing data
+# fillrow = which(is.na(denali_data$prcp))
+# fillrow
+# denali_data$prcp[fillrow]=0
+# replot to make sure it works
+
+# remove NAs from precipitation
+prcp_subset <- denali_data %>% 
+  filter(!(is.na(prcp)))
+
+# plot it again
+ggplot(prcp_subset, aes(date, prcp))+
+  geom_line()+ 
+  labs(y="Daily rainfall (mm)", x="Date")
+
+# find rows with missing data
+# temperature
+fillrow = which(is.na(denali_data$tmax) | denali_data$tmax < 40)
+fillrow = fillrow[2:length(fillrow)]
+denali_data$tmax[fillrow]=(denali_data$tmax[fillrow+1]+denali_data$tmax[fillrow-1])/2
+ggplot(denali_data, aes(date, denali_data$tmax))+geom_line()+ labs(y="Daily Maximum Temperature (degrees F)", x="Date")
+
+# temp_subset <- denali_data %>% 
+#   mutate(tmax = replace(is.na(tmax), 0)) %>% 
+#   mutate(tmax = ifelse(is.na(tmax), ((lag(tmax)+lead(tmax))/2), tmax))
+
+```
+
+
+**Is there a trend?**
+
+Trends can be 'swamped' by variation; in this case, the seasonal cycle is quite large. We also need to consider autocorrelation! 
+
+So here let's try doing some aggregation to reduce the noise. As a simple example, we can try annual averages.
+
+```{r annual, echo=TRUE}
+
+denali_agg <-  denali_data %>% 
+  group_by(year(date)) %>% 
+  summarize(tmax=mean(tmax, na.rm = TRUE), tmin=mean(tmin, na.rm = TRUE), precip=sum(prcp, na.rm = TRUE)) %>% 
+  rename(year = 1)
+
+ggplot(denali_agg, aes(x=year, tmax))+
+  geom_point(col="red")+
+  scale_y_continuous(limits=c(min(denali_agg$tmin), max(denali_agg$tmax)))+
+  geom_point(data=denali_agg, aes(x=year, tmin), col="blue")
+
+ggplot(denali_agg, aes(x=year, tmax))+
+  geom_point(col="red")+
+  scale_y_continuous(limits=c(min(denali_agg$tmin), max(denali_agg$tmax)))+
+  geom_point(data=denali_agg, aes(x=year, tmin), col="blue")+
+  stat_smooth(method="lm", col="red")+
+  stat_smooth(data=denali_agg, aes(x=year,tmin), col="blue", method="lm")
+
+```
+
+Notice the different behavior of the min and max temperatures! 
+
+OK now let's put a trend line on this thing.
+
+```{r wy, echo=TRUE}
+
+# now lets add a trend line
+
+
+```
+
+
+
+Now let's calculate the slope (or how quickly temperatures are rising; we do this with linear regression)
+
+```{r regressionline, echo=TRUE}
+
+
+res=lm(tmin~year, data=denali_agg)
+summary(res)
+confint(res,"year", level=0.95)
+ggplot(denali_agg, aes(x=year, y=tmin)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+```
+
+The slope on a linear regression between Tmin and wy is the rate of increase in Tmin (mean annual daily minimum temperature).
+
+The value of the slope is -0.037 F/year, and is statistically significant.
+
+
+Let's do the same analysis for the MAXIMUM temperature now...
+
+```{r tmaxreg, echo=TRUE}
+
+
+res=lm(tmax~year, data=denali_agg)
+summary(res)
+confint(res,"year", level=0.95)
+ggplot(denali_agg, aes(x=year, y=tmax)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+```
+
+Now we find a positive trend: 0.071F/year, or 0.71F/decade. But notice that there seem to be some outliers toward the end of the record...
+
+We might also cut the data into specific periods and see how the slope is changing as a function of time.
+
+```{r subset, echo=TRUE}
+
+
+# early portion
+res_early=lm(tmin~year, data=subset(denali_agg, denali_agg$year %in% c(1925:1970)))
+summary(res_early)
+confint(res_early,"year", level=0.90)
+ggplot(subset(denali_agg, denali_agg$year %in% c(1925:1970)), aes(x=year, y=tmin)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+
+# late portion
+res_late=lm(tmin~year, data=subset(denali_agg, denali_agg$year %in% c(1970:2020)))
+summary(res_late)
+confint(res_late,"year", level=0.90)
+ggplot(subset(denali_agg, denali_agg$year %in% c(1970:2020)), aes(x=year, y=tmin)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+
+# since 2000
+res_recent=lm(tmin~year, data=subset(denali_agg, denali_agg$year %in% c(2000:2020)))
+summary(res_recent)
+confint(res_recent,"year", level=0.90)
+ggplot(subset(denali_agg, denali_agg$year %in% c(2000:2020)), aes(x=year, y=tmin)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+```
+Repeat for maximums
+
+```{r subset max, echo=TRUE}
+
+# early portion
+res_early=lm(tmax~year, data=subset(denali_agg, denali_agg$year %in% c(1925:1970)))
+summary(res_early)
+confint(res_early,"year", level=0.90)
+ggplot(subset(denali_agg, denali_agg$year %in% c(1925:1970)), aes(x=year, y=tmax)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+
+# late portion
+res_late=lm(tmax~year, data=subset(denali_agg, denali_agg$year %in% c(1970:2020)))
+summary(res_late)
+confint(res_late,"year", level=0.90)
+ggplot(subset(denali_agg, denali_agg$year %in% c(1970:2020)), aes(x=year, y=tmax)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+
+# since 2000
+res_recent=lm(tmax~year, data=subset(denali_agg, denali_agg$year %in% c(2000:2020)))
+summary(res_recent)
+confint(res_recent,"year", level=0.90)
+ggplot(subset(denali_agg, denali_agg$year %in% c(2000:2020)), aes(x=year, y=tmax)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+```
+
+
+
+Regression assumes a linear relationship - and normally distributed data - sometimes that isn't true, we can use non-parameteric tests to look for trends. In these cases, the Mann-Kendall test is commonly used.
+
+tau ranges from -1 to 1 and denotes the "strength" of the trend; p-value denotes significance. Strength however can not be interpreted as slope!
+
+```{r kendall, echo=TRUE}
+
+library(Kendall)
+MannKendall(denali_agg$tmin)
+MannKendall(denali_agg$tmax)
+MannKendall(denali_agg$precip)
+
+```
+We might also look at difference in means (or variance) between the two periods ...Using
+
+T-test
+or Rank-Sum if we think data is not normally distributed
+
+
+```{r ttest, echo=TRUE}
+
+t.test(subset(denali_agg$tmin, denali_agg$year %in% 1925:1970), subset(denali_agg$tmin, denali_agg$year %in% 1970:2020))
+t.test(subset(denali_agg$tmax, denali_agg$year %in% 1925:1970), subset(denali_agg$tmax, denali_agg$year %in% 1970:2020))
+t.test(subset(denali_agg$precip, denali_agg$year %in% 1925:1970), subset(denali_agg$precip, denali_agg$year %in% 1970:2020))
+
+```
+There is a statistically significant difference in the means 
+
+An alternative approach to aggregation (mean by year)
+is to look at a particular season, lets say we want to look only at summer (July and August)
+
+
+```{r alternative, echo=TRUE}
+# create a variable
+denali_data.byseason <- denali_data %>% 
+  mutate(season = ifelse(month(date) %in% c(12,1,2), 1, ifelse(month(date) %in% c(3:5),2, ifelse(month(date) %in% c(6:8),3,4))))
+
+denali_data.byseason <-  denali_data.byseason %>% 
+  group_by(year(date),season) %>% 
+  summarize(tmax=mean(tmax), tmin=mean(tmin), precip=sum(prcp))
+
+# look only at summer
+denali.summer = subset(denali_data.byseason, denali_data.byseason$season==3) %>% 
+  rename(year = 1)
+tmp=unique(denali.summer$year)
+# denali.summer$wy = tmp[1:length(tmp)-1]
+
+ggplot(denali.summer, aes(x=year, y=tmin)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")+labs(y=" Summer Minimum Daily Temperature C")
+
+res=lm(tmax~year, data=denali.summer)
+summary(res)
+confint(res,"year", level=0.95)
+
+```
+Notice how the trends in summer minimum temperature differ from the annual minimum temperature trend
+(Useful to do a Mann Kendall first in case trend is not linear)
+
+Do we care? ...Depends on the application!
+
+#######################
+
+EXTREMES
+
+We already looked at the behavior of trends in some metrics - but here are a couple other examples of useful extremes.
+
+1) Number of freezing days: select all days with temperatures below 32F
+
+```{r other metrics, echo=TRUE}
+
+denali_data$freeze = ifelse(denali_data$tmin <= 32, 1, 0)
+denali_data.pk = denali_data %>% group_by(year(date)) %>% summarize(ndayfr=sum(freeze)) %>% 
+  rename(year = 1)
+
+ggplot(denali_data.pk, aes(year, ndayfr))+geom_point()+labs(y="Number of Freezing Days") +
+  stat_smooth(method="lm", col="red")
+
+# note - lm might not be appropriate for this one, but let's look at a subset of data
+
+ggplot(subset(denali_data.pk, year %in% c(1975:2020)), aes(year, ndayfr))+geom_point()+labs(y="Number of Freezing Days") +
+  stat_smooth(method="lm", col="red")
+
+#linear regression
+lm_cold=lm(ndayfr~year, data=denali_data.pk)
+summary(lm_cold)
+confint(lm_cold,"year", level=0.95)
+ggplot(denali_data.pk, aes(x=year, y=ndayfr)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+```
+
+Note that the trends in mean-state and extreme metrics often go together: from last time, recall that there was a trend toward decreasing minimum daily temperature. How does that affect the frequency of occurrence of freezing days?
+
+
+2) Hottest day of the year
+
+Looking at the warm end of the temperature distribution, we can look for trends in the temperature during the hottest day of the year.
+
+``` {r}
+denali.hot = denali_data %>% group_by(year(date)) %>% summarize(hotday=max(tmax)) %>% 
+  rename(year = 1)
+
+ggplot(denali.hot, aes(year, hotday))+ geom_point()+labs(y="Hottest Day in the Year") +
+  stat_smooth(method="lm", col="red") + 
+  theme_minimal()
+
+lm_hot=lm(hotday~year, data=denali.hot)
+summary(lm_hot)
+confint(lm_hot,"year", level=0.95)
+ggplot(denali.hot, aes(x=year, y=hotday)) + stat_summary(fun.y="mean", geom="point", col="red", size=4)+theme(axis.text=element_text(size=14, face="bold"), axis.title=element_text(size=14, face="bold")) + geom_smooth(method="lm")
+
+# subset
+ggplot(subset(denali.hot, year %in% c(1975:2020)), aes(year, hotday))+geom_point()+labs(y="Hottest Day in the Year") +
+  stat_smooth(method="lm", col="red") +
+  theme_minimal()
+
+  
+```
+
+3) Return periods 
+
+In lecture, we discussed the concept of return periods and return levels. Here is how you calculate these things with real data!
+
+Calculate the return period of 1 in daily precipitation
+
+``` {r return period}
+denali_data$flood = ifelse(denali_data$prcp >= 1, 1, 0)
+nyrs=length(unique(year(denali_data$date)))
+
+retper=(nyrs+1)/sum(denali_data$flood,na.rm=TRUE)
+
+retper
+```
+
+4) statistical tests
+```{r}
+MannKendall(denali_data.pk$ndayfr)
+MannKendall(denali.hot$hotday)
+MannKendall(denali_agg$precip)
+```
+
+(note: return *levels* are somewhat more complicated to calculate, since they require fitting the underlying distribution of the data... there are lots of resources out there if you need them though!)
